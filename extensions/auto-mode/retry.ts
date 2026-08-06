@@ -38,8 +38,26 @@ const NON_RETRYABLE_CLASSIFIER_ERRORS = new RegExp(
   "i",
 );
 
+/**
+ * Transient markers that override the blacklist: proxy gateways (e.g.
+ * OpenRouter) wrap upstream shared-pool rate limits in quota-flavored codes
+ * like insufficient_quota, while the payload itself says the condition is
+ * temporary ("Please retry shortly"). Those are worth retrying; account-level
+ * quota exhaustion never carries these markers.
+ */
+const TRANSIENT_CLASSIFIER_ERROR_OVERRIDES = new RegExp(
+  [
+    "upstream_provider_shared_pool",
+    "temporarily rate.?limited",
+    "rate.?limited upstream",
+    "retry shortly",
+  ].join("|"),
+  "i",
+);
+
 /** True when the error is deterministic and retrying would only waste backoff time. */
 export function isNonRetryableClassifierError(message: string): boolean {
+  if (TRANSIENT_CLASSIFIER_ERROR_OVERRIDES.test(message)) return false;
   return NON_RETRYABLE_CLASSIFIER_ERRORS.test(message);
 }
 

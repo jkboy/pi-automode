@@ -833,8 +833,9 @@ test("classifyInStages fails closed when the fast stage throws", async () => {
 });
 
 test("classifyInStages fails closed on non-stop fast-stage allows", async () => {
+	// "length" is exercised separately in classifier-retry.test.ts: truncation
+	// is retried immediately instead of failing closed on the first attempt.
 	for (const [stopReason, errorMessage] of [
-		["length", "Fast classifier response did not stop cleanly"],
 		["toolUse", "Fast classifier response did not stop cleanly"],
 		["error", "Provider failed"],
 		["aborted", "Request was aborted"],

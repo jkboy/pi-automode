@@ -140,6 +140,81 @@ test("fast stage fails closed after exhausting the transient retry budget", asyn
 	assert.equal(callCount(), 3);
 });
 
+const OPENROUTER_SHARED_POOL_429 =
+	'429 {"error":{"message":"Provider returned error","code":429,"metadata":{"raw":"qwen/qwen3.7-flash is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits.","provider_error_code":"insufficient_quota","limit_source":"upstream_provider_shared_pool"}}}';
+
+test("fast stage retries a shared-pool 429 wrapped as insufficient_quota and recovers", async () => {
+	const { fn, callCount } = fakeCompleteOrThrow([
+		assistantWith("", "error", OPENROUTER_SHARED_POOL_429),
+		assistantWith("0"),
+	]);
+	const attempts: ClassifierIoAttempt[] = [];
+	const decision = await classifyInStages(
+		fn,
+		{ model: { provider: "test", id: "x" } } as never,
+		STAGE_PROMPT,
+		undefined,
+		{
+			sessionId: "s",
+			retry: { maxAttempts: 3, baseDelayMs: 0 },
+			onAttempt: (a) => attempts.push(a),
+		},
+	);
+
+	assert.equal(decision.decision, "allow");
+	assert.equal(callCount(), 2);
+	assert.equal(attempts[0]?.retryDelayMs, 0);
+});
+
+test("fast stage retries a length-truncated response immediately and recovers", async () => {
+	const { fn, callCount } = fakeCompleteOrThrow([
+		assistantWith("", "length"),
+		assistantWith("0"),
+	]);
+	const decision = await classifyInStages(
+		fn,
+		{ model: { provider: "test", id: "x" } } as never,
+		STAGE_PROMPT,
+		undefined,
+		{ sessionId: "s", retry: { maxAttempts: 3, baseDelayMs: 0 } },
+	);
+
+	assert.equal(decision.decision, "allow");
+	assert.equal(callCount(), 2);
+});
+
+test("fast stage never trusts a digit from a truncated response", async () => {
+	const { fn, callCount } = fakeCompleteOrThrow([
+		assistantWith("0", "length"),
+	]);
+	const decision = await classifyInStages(
+		fn,
+		{ model: { provider: "test", id: "x" } } as never,
+		STAGE_PROMPT,
+		undefined,
+		{ sessionId: "s", retry: { maxAttempts: 3, baseDelayMs: 0 } },
+	);
+
+	assert.equal(decision.decision, "block");
+	assert.match(decision.reason, /truncated before producing a 0\/1 verdict/);
+	assert.equal(callCount(), 2);
+});
+
+test("fast stage fails closed with a truncation reason after repeated length stops", async () => {
+	const { fn, callCount } = fakeCompleteOrThrow([assistantWith("", "length")]);
+	const decision = await classifyInStages(
+		fn,
+		{ model: { provider: "test", id: "x" } } as never,
+		STAGE_PROMPT,
+		undefined,
+		{ sessionId: "s", retry: { maxAttempts: 3, baseDelayMs: 0 } },
+	);
+
+	assert.equal(decision.decision, "block");
+	assert.match(decision.reason, /truncated before producing a 0\/1 verdict/);
+	assert.equal(callCount(), 2);
+});
+
 test("fast stage retries a non-0/1 response once and recovers", async () => {
 	const { fn, callCount } = fakeCompleteOrThrow([
 		assistantWith("maybe"),
@@ -261,6 +336,16 @@ test("invalid classifierRetry values fall back to defaults and surface diagnosti
 test("retry helpers: blacklist matching and backoff math", () => {
 	assert.equal(isNonRetryableClassifierError("HTTP 401 from provider"), true);
 	assert.equal(isNonRetryableClassifierError("insufficient_quota"), true);
+	// Transient markers override quota-flavored codes from proxy gateways.
+	assert.equal(isNonRetryableClassifierError(OPENROUTER_SHARED_POOL_429), false);
+	assert.equal(
+		isNonRetryableClassifierError("insufficient_quota — temporarily rate-limited upstream"),
+		false,
+	);
+	assert.equal(
+		isNonRetryableClassifierError("quota exceeded, please retry shortly"),
+		false,
+	);
 	assert.equal(isNonRetryableClassifierError("Unsupported parameter: temperature"), true);
 	assert.equal(isNonRetryableClassifierError("该客户端不支持"), true);
 	assert.equal(isNonRetryableClassifierError("500 Internal Server Error"), false);

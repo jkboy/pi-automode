@@ -445,6 +445,8 @@ export async function classifyInStages(
   let errorFailures = 0;
   let attempt = 0;
   let enteredDetailed = false;
+  let lastFastReason =
+    "Fast classifier response was not 0 or 1 after trimming whitespace; auto mode fails closed.";
   while (
     malformedFailures < maxMalformedAttempts &&
     errorFailures < retry.maxAttempts
@@ -529,12 +531,16 @@ export async function classifyInStages(
       continue;
     }
 
-    const fastText = extractAssistantText(fastResponse!, false).trim();
-    const failure = classifierFailure(fastResponse!, "Fast classifier");
+    const failure = classifierFailure(fastResponse!, "Fast classifier", true);
     options.onAttempt?.(
       responseAttempt("fast", attempt, fastResponse!, durationMs, undefined, false),
     );
     if (failure) return failure;
+    // Only trust the digit from a clean stop; a "length" stop means the token
+    // budget ran out (e.g. hidden reasoning) before a reliable verdict.
+    const fastText = fastResponse!.stopReason === "stop"
+      ? extractAssistantText(fastResponse!, false).trim()
+      : undefined;
     if (fastText === "0") {
       return {
         decision: "allow",
@@ -546,16 +552,14 @@ export async function classifyInStages(
       enteredDetailed = true;
       break;
     }
-    // Malformed (non-0/1) output: retry immediately, no backoff.
+    // Malformed (non-0/1) or truncated output: retry immediately, no backoff.
     malformedFailures += 1;
+    lastFastReason = fastResponse!.stopReason === "length"
+      ? "Fast classifier response was truncated before producing a 0/1 verdict; auto mode fails closed."
+      : "Fast classifier response was not 0 or 1 after trimming whitespace; auto mode fails closed.";
   }
   if (!enteredDetailed) {
-    return {
-      decision: "block",
-      tier: "none",
-      reason:
-        "Fast classifier response was not 0 or 1 after trimming whitespace; auto mode fails closed.",
-    };
+    return { decision: "block", tier: "none", reason: lastFastReason };
   }
 
   return classifyWithRetry(
