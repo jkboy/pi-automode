@@ -29,6 +29,14 @@ export type ClassifierReasoningLog =
     effectiveLevel?: undefined;
   };
 
+/** Transient-error retry policy for classifier completions. */
+export type ClassifierRetryConfig = {
+  /** Total completion attempts for transient failures (1 = no retry). */
+  maxAttempts: number;
+  /** First backoff delay in ms; doubles per additional retry. */
+  baseDelayMs: number;
+};
+
 /** Observability log configuration. Off by default. */
 export type LogConfig = {
   enabled: boolean;
@@ -54,6 +62,7 @@ export type AutoModeSettings = {
   hard_deny?: unknown;
   hardDeny?: unknown;
   log?: Partial<LogConfig>;
+  classifierRetry?: Partial<ClassifierRetryConfig>;
 };
 
 export type SettingsFile = {
@@ -92,6 +101,7 @@ export type EffectiveConfig = {
   permissionDeny: ToolPattern[];
   permissionAsk: ToolPattern[];
   log: LogConfig;
+  classifierRetry: ClassifierRetryConfig;
 };
 
 export type AutoModeState = {
@@ -142,6 +152,8 @@ export type ClassifierIoAttempt = {
   parsed?: ClassificationDecision;
   error?: string;
   durationMs: number;
+  /** Backoff delay scheduled after this failed attempt, when a retry follows. */
+  retryDelayMs?: number;
 };
 
 /** Full classifier I/O for an action, surfaced for optional observability logging. */

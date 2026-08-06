@@ -17,7 +17,7 @@ For each Pi `tool_call` event, the extension does this:
 9. Run structured classifier review only when the filter requests it, then allow or block.
 10. Persist state and update the UI status/denial history.
 
-The default posture is fail-closed. If the classifier cannot be resolved, has no API key, errors, or returns an invalid stage response, the action is blocked.
+The default posture is fail-closed. If the classifier cannot be resolved, has no API key, or returns an invalid stage response, the action is blocked. Transient completion errors (network failures, timeouts, 5xx, stream errors) are retried with exponential backoff (`classifierRetry`, default 3 total attempts with a 1s base delay) before failing closed; deterministic errors (auth, billing/quota, invalid requests) fail closed immediately. Malformed stage output (a fast response that is not `0`/`1`, or detailed output that is not valid decision JSON) is retried once without backoff.
 
 ## Diagram
 

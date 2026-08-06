@@ -102,12 +102,13 @@ Written only for classifier-routed actions, and only when `classifierIo: true`. 
 | `durationMs` | total classifier time |
 | `parsed` | the final decision that was acted on (`{ decision, tier, reason }`) |
 
-Each `attempts[]` entry is `{ stage, attempt, response?, parsed?, error?, durationMs }`:
+Each `attempts[]` entry is `{ stage, attempt, response?, parsed?, error?, durationMs, retryDelayMs? }`:
 
 - `stage` — `fast` for the one-token filter or `detailed` for structured review.
 - `response` — `{ stopReason, text, model, timestamp, usage, errorMessage? }`, the raw model output and provider-reported usage for that call, including provider-reported errors and aborted requests.
 - `parsed` — the decision parsed from the response, or absent if it did not parse.
 - `error` — present when the call threw (network/auth); `response` is then absent.
+- `retryDelayMs` — present on a failed attempt when a backoff retry follows; records the scheduled wait.
 
 This records both stages, retries, and fail-closed cases verbatim. A fast allow has one entry. A review followed by malformed detailed JSON and a successful retry has three entries.
 

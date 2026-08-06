@@ -190,6 +190,12 @@ export const DEFAULT_CLASSIFY_READ_ONLY_TOOLS = false;
 /** Default upper bound on fast-stage completion tokens (see PR note). */
 export const DEFAULT_FAST_CLASSIFIER_MAX_TOKENS = 512;
 
+/** Default transient-error retry: 3 total attempts, 1s -> 2s backoff. */
+export const DEFAULT_CLASSIFIER_RETRY = {
+  maxAttempts: 3,
+  baseDelayMs: 1000,
+};
+
 /** Default observability log config: off, classifier I/O off. */
 export const DEFAULT_LOG_CONFIG = {
   enabled: false,

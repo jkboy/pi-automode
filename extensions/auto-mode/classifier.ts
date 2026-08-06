@@ -14,9 +14,15 @@ import {
   CLASSIFIER_DETAILED_INSTRUCTION,
   CLASSIFIER_FAST_INSTRUCTION,
   CLASSIFIER_SYSTEM_PROMPT,
+  DEFAULT_CLASSIFIER_RETRY,
   DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
 } from "./constants.ts";
 import { formatModelSpec, parseModelSpec } from "./model.ts";
+import {
+  classifierRetryDelayMs,
+  isNonRetryableClassifierError,
+  waitForClassifierRetry,
+} from "./retry.ts";
 import { buildClassifierTranscript } from "./transcript.ts";
 import type {
   ClassificationDecision,
@@ -25,6 +31,7 @@ import type {
   ClassifierReasoning,
   ClassifierReasoningLevel,
   ClassifierReasoningLog,
+  ClassifierRetryConfig,
   ClassifyResult,
   EffectiveClassifierReasoningLevel,
   EffectiveConfig,
@@ -119,6 +126,7 @@ export type ClassifierCompletionFn = (
 ) => Promise<AssistantMessage>;
 
 export type RetryOptions = {
+  /** Budget for malformed/truncated output retries (immediate, no backoff). */
   maxAttempts?: number;
   maxTokens?: number;
   temperature?: number;
@@ -126,6 +134,8 @@ export type RetryOptions = {
   sessionId?: string;
   cacheRetention?: "none" | "short" | "long";
   stage?: "fast" | "detailed";
+  /** Transient-error retry policy; falls back to DEFAULT_CLASSIFIER_RETRY. */
+  retry?: ClassifierRetryConfig;
   /** Receives each attempt's raw response (or error) and parsed decision, for observability logging. */
   onAttempt?: (attempt: ClassifierIoAttempt) => void;
 };
@@ -135,6 +145,8 @@ export type StagedClassifierOptions = {
   /** Override the fast-stage token budget; falls back to the default (512). */
   fastClassifierMaxTokens?: number;
   reasoningLevel?: Exclude<EffectiveClassifierReasoningLevel, "off">;
+  /** Transient-error retry policy; falls back to DEFAULT_CLASSIFIER_RETRY. */
+  retry?: ClassifierRetryConfig;
   onAttempt?: (attempt: ClassifierIoAttempt) => void;
 };
 
@@ -297,7 +309,8 @@ function classifierFailure(
 
 /**
  * Call the detailed classifier and parse its decision, retrying malformed or
- * truncated output. Provider errors and exhausted retries fail closed.
+ * truncated output immediately and transient completion errors with
+ * exponential backoff. Deterministic errors and exhausted budgets fail closed.
  */
 export async function classifyWithRetry(
   completeFn: ClassifierCompletionFn,
@@ -310,16 +323,22 @@ export async function classifyWithRetry(
   signal: AbortSignal | undefined,
   options: RetryOptions = {},
 ): Promise<ClassificationDecision> {
-  const maxAttempts = options.maxAttempts ?? 2;
+  const maxParseAttempts = options.maxAttempts ?? 2;
+  const retry = options.retry ?? DEFAULT_CLASSIFIER_RETRY;
   const maxTokens = options.maxTokens ?? 1200;
   const temperature = options.temperature;
   const stage = options.stage ?? "detailed";
   const onAttempt = options.onAttempt;
   let lastReason =
     "Classifier response was not valid decision JSON; auto mode fails closed.";
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+  let parseFailures = 0;
+  let errorFailures = 0;
+  let attempt = 0;
+  while (parseFailures < maxParseAttempts && errorFailures < retry.maxAttempts) {
+    attempt += 1;
     const started = Date.now();
-    let response: AssistantMessage;
+    let response: AssistantMessage | undefined;
+    let thrown: string | undefined;
     try {
       response = await completeFn(
         classifier.model,
@@ -338,31 +357,69 @@ export async function classifyWithRetry(
         },
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      onAttempt?.({
-        stage,
-        attempt: attempt + 1,
-        error: message,
-        durationMs: Date.now() - started,
-      });
-      return {
-        decision: "block",
-        tier: "none",
-        reason: `Classifier failed; auto mode fails closed: ${message}`,
-      };
+      thrown = error instanceof Error ? error.message : String(error);
     }
     const durationMs = Date.now() - started;
-    const failure = classifierFailure(response, "Classifier", true);
-    const decision = response.stopReason === "stop"
-      ? parseClassifierDecision(response)
+
+    // Providers report most runtime failures (network, timeout, 5xx) as a
+    // resolved stopReason "error" response rather than a thrown error; both
+    // paths get the same blacklist-inverted transient retry.
+    const errorMessage = thrown ??
+      (response!.stopReason === "error"
+        ? response!.errorMessage ||
+          "Classifier model returned an error response."
+        : undefined);
+    if (errorMessage !== undefined) {
+      errorFailures += 1;
+      const willRetry = errorFailures < retry.maxAttempts &&
+        !isNonRetryableClassifierError(errorMessage) &&
+        !signal?.aborted;
+      const delayMs = willRetry
+        ? classifierRetryDelayMs(errorFailures, retry.baseDelayMs)
+        : undefined;
+      onAttempt?.(
+        thrown !== undefined
+          ? {
+            stage,
+            attempt,
+            error: thrown,
+            durationMs,
+            ...(delayMs === undefined ? {} : { retryDelayMs: delayMs }),
+          }
+          : {
+            ...responseAttempt(stage, attempt, response!, durationMs, undefined, false),
+            ...(delayMs === undefined ? {} : { retryDelayMs: delayMs }),
+          },
+      );
+      if (!willRetry) {
+        return {
+          decision: "block",
+          tier: "none",
+          reason: `Classifier failed; auto mode fails closed: ${errorMessage}`,
+        };
+      }
+      if (!(await waitForClassifierRetry(delayMs!, signal))) {
+        return {
+          decision: "block",
+          tier: "none",
+          reason: "Classifier retry was aborted; auto mode fails closed.",
+        };
+      }
+      continue;
+    }
+
+    const failure = classifierFailure(response!, "Classifier", true);
+    const decision = response!.stopReason === "stop"
+      ? parseClassifierDecision(response!)
       : undefined;
     onAttempt?.(
-      responseAttempt(stage, attempt + 1, response, durationMs, decision, false),
+      responseAttempt(stage, attempt, response!, durationMs, decision, false),
     );
     if (failure) return failure;
     if (decision) return decision;
+    parseFailures += 1;
     lastReason =
-      response.stopReason === "length"
+      response!.stopReason === "length"
         ? "Classifier response was truncated before producing valid decision JSON; auto mode fails closed."
         : "Classifier response was not valid decision JSON; auto mode fails closed.";
   }
@@ -381,69 +438,118 @@ export async function classifyInStages(
   signal: AbortSignal | undefined,
   options: StagedClassifierOptions,
 ): Promise<ClassificationDecision> {
-  const fastStarted = Date.now();
-  let fastResponse: AssistantMessage;
-  try {
-    fastResponse = await completeFn(
-      classifier.model,
-      {
-        systemPrompt: prompt.systemPrompt,
-        messages: [
-          prompt.contextMessage,
-          stageMessage(CLASSIFIER_FAST_INSTRUCTION),
-        ],
-      },
-      {
-        apiKey: classifier.apiKey,
-        headers: classifier.headers,
-        signal,
-        // Reasoning and OpenAI-compatible models may consume hidden reasoning,
-        // control, and EOS tokens before emitting the required visible digit.
-        maxTokens: options.fastClassifierMaxTokens ??
-          DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
-        ...(options.reasoningLevel === undefined
-          ? {}
-          : { reasoning: options.reasoningLevel }),
-        sessionId: options.sessionId,
-        cacheRetention: "short",
-      },
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    options.onAttempt?.({
-      stage: "fast",
-      attempt: 1,
-      error: message,
-      durationMs: Date.now() - fastStarted,
-    });
-    return {
-      decision: "block",
-      tier: "none",
-      reason: `Fast classifier failed; auto mode fails closed: ${message}`,
-    };
-  }
+  const retry = options.retry ?? DEFAULT_CLASSIFIER_RETRY;
+  // Non-0/1 output budget, aligned with the detailed stage's parse budget.
+  const maxMalformedAttempts = 2;
+  let malformedFailures = 0;
+  let errorFailures = 0;
+  let attempt = 0;
+  let enteredDetailed = false;
+  while (
+    malformedFailures < maxMalformedAttempts &&
+    errorFailures < retry.maxAttempts
+  ) {
+    attempt += 1;
+    const fastStarted = Date.now();
+    let fastResponse: AssistantMessage | undefined;
+    let thrown: string | undefined;
+    try {
+      fastResponse = await completeFn(
+        classifier.model,
+        {
+          systemPrompt: prompt.systemPrompt,
+          messages: [
+            prompt.contextMessage,
+            stageMessage(CLASSIFIER_FAST_INSTRUCTION),
+          ],
+        },
+        {
+          apiKey: classifier.apiKey,
+          headers: classifier.headers,
+          signal,
+          // Reasoning and OpenAI-compatible models may consume hidden reasoning,
+          // control, and EOS tokens before emitting the required visible digit.
+          maxTokens: options.fastClassifierMaxTokens ??
+            DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
+          ...(options.reasoningLevel === undefined
+            ? {}
+            : { reasoning: options.reasoningLevel }),
+          sessionId: options.sessionId,
+          cacheRetention: "short",
+        },
+      );
+    } catch (error) {
+      thrown = error instanceof Error ? error.message : String(error);
+    }
+    const durationMs = Date.now() - fastStarted;
 
-  const fastText = extractAssistantText(fastResponse, false).trim();
-  const failure = classifierFailure(fastResponse, "Fast classifier");
-  options.onAttempt?.(
-    responseAttempt(
-      "fast",
-      1,
-      fastResponse,
-      Date.now() - fastStarted,
-      undefined,
-      false,
-    ),
-  );
-  if (failure) return failure;
-  if (fastText === "0") {
-    return {
-      decision: "allow",
-      tier: "none",
-      reason: "Fast classifier found no policy-relevant risk.",
-    };
+    // Same blacklist-inverted transient retry as the detailed stage; providers
+    // report most runtime failures as resolved stopReason "error" responses.
+    const errorMessage = thrown ??
+      (fastResponse!.stopReason === "error"
+        ? fastResponse!.errorMessage ||
+          "Classifier model returned an error response."
+        : undefined);
+    if (errorMessage !== undefined) {
+      errorFailures += 1;
+      const willRetry = errorFailures < retry.maxAttempts &&
+        !isNonRetryableClassifierError(errorMessage) &&
+        !signal?.aborted;
+      const delayMs = willRetry
+        ? classifierRetryDelayMs(errorFailures, retry.baseDelayMs)
+        : undefined;
+      options.onAttempt?.(
+        thrown !== undefined
+          ? {
+            stage: "fast",
+            attempt,
+            error: thrown,
+            durationMs,
+            ...(delayMs === undefined ? {} : { retryDelayMs: delayMs }),
+          }
+          : {
+            ...responseAttempt("fast", attempt, fastResponse!, durationMs, undefined, false),
+            ...(delayMs === undefined ? {} : { retryDelayMs: delayMs }),
+          },
+      );
+      if (!willRetry) {
+        return {
+          decision: "block",
+          tier: "none",
+          reason: `Fast classifier failed; auto mode fails closed: ${errorMessage}`,
+        };
+      }
+      if (!(await waitForClassifierRetry(delayMs!, signal))) {
+        return {
+          decision: "block",
+          tier: "none",
+          reason: "Fast classifier retry was aborted; auto mode fails closed.",
+        };
+      }
+      continue;
+    }
+
+    const fastText = extractAssistantText(fastResponse!, false).trim();
+    const failure = classifierFailure(fastResponse!, "Fast classifier");
+    options.onAttempt?.(
+      responseAttempt("fast", attempt, fastResponse!, durationMs, undefined, false),
+    );
+    if (failure) return failure;
+    if (fastText === "0") {
+      return {
+        decision: "allow",
+        tier: "none",
+        reason: "Fast classifier found no policy-relevant risk.",
+      };
+    }
+    if (fastText === "1") {
+      enteredDetailed = true;
+      break;
+    }
+    // Malformed (non-0/1) output: retry immediately, no backoff.
+    malformedFailures += 1;
   }
-  if (fastText !== "1") {
+  if (!enteredDetailed) {
     return {
       decision: "block",
       tier: "none",
@@ -468,6 +574,7 @@ export async function classifyInStages(
       sessionId: options.sessionId,
       cacheRetention: "short",
       reasoningLevel: options.reasoningLevel,
+      retry: options.retry,
       onAttempt: options.onAttempt,
     },
   );
@@ -525,6 +632,7 @@ export const defaultClassifyAction: ClassifyAction = async (
       sessionId: classifierCacheSessionId(ctx),
       fastClassifierMaxTokens: config.fastClassifierMaxTokens,
       reasoningLevel: completionPlan.reasoningLevel,
+      retry: config.classifierRetry,
       onAttempt: (attempt) => attempts.push(attempt),
     },
   );

@@ -101,6 +101,7 @@ Example:
     "classifierReasoningLevel": "low",
     "classifyReadOnlyTools": false,
     "fastClassifierMaxTokens": 512,
+    "classifierRetry": { "maxAttempts": 3, "baseDelayMs": 1000 },
     "maxUserTranscriptTokens": 4000,
     "maxToolTranscriptTokens": 4000,
     "environment": [
@@ -126,6 +127,10 @@ Example:
 ```
 
 `maxUserTranscriptTokens` and `maxToolTranscriptTokens` are approximate per-category budgets; both default to 4000 and accept integers of at least 32. The former `maxTranscriptLines` setting is no longer supported because evidence selection is token-budgeted rather than line-based.
+
+### Classifier retry
+
+Transient completion failures (network errors, timeouts, 5xx responses, stream failures) are retried with exponential backoff before auto mode fails closed: `baseDelayMs × 2^(n-1)` after the n-th failure, up to `classifierRetry.maxAttempts` total attempts (default 3 attempts, 1s base delay — worst case adds ~3s). Deterministic failures (auth, billing/quota exhaustion, invalid requests) fail closed immediately without retrying, and an exhausted budget still fails closed. Aborting the request cancels any pending backoff wait and fails closed. Malformed output — a fast-stage response that is not `0`/`1`, or detailed-stage output that is not valid decision JSON — is retried once immediately, without backoff. `maxAttempts` accepts integers ≥ 1 (1 disables transient retries); `baseDelayMs` accepts integers ≥ 0.
 
 ### Ask-user tools and explicit authorization
 

@@ -777,7 +777,11 @@ test("classifyInStages forwards one reasoning level to fast and detailed calls",
 });
 
 test("classifyInStages fails closed on malformed fast-stage output", async () => {
-	const { fn, calls } = fakeComplete([assistantWith("0 because safe")]);
+	// Non-0/1 output is retried once (no backoff) before failing closed.
+	const { fn, calls } = fakeComplete([
+		assistantWith("0 because safe"),
+		assistantWith("still not a digit"),
+	]);
 	const decision = await classifyInStages(
 		fn,
 		{ model: { provider: "test", id: "x" } },
@@ -788,7 +792,7 @@ test("classifyInStages fails closed on malformed fast-stage output", async () =>
 
 	assert.equal(decision.decision, "block");
 	assert.match(decision.reason, /fast classifier response/i);
-	assert.equal(calls.length, 1);
+	assert.equal(calls.length, 2);
 });
 
 test("classifyInStages accepts surrounding whitespace and logs the fast-stage token verbatim", async () => {
@@ -818,7 +822,10 @@ test("classifyInStages fails closed when the fast stage throws", async () => {
 		{ model: { provider: "test", id: "x" } },
 		{ systemPrompt: "policy", contextMessage: { role: "user", content: [{ type: "text", text: "context" }], timestamp: 1 } },
 		undefined,
-		{ sessionId: "pi-automode:test-session" },
+		{
+			sessionId: "pi-automode:test-session",
+			retry: { maxAttempts: 1, baseDelayMs: 0 },
+		},
 	);
 
 	assert.equal(decision.decision, "block");
@@ -843,7 +850,11 @@ test("classifyInStages fails closed on non-stop fast-stage allows", async () => 
 			{ model: { provider: "test", id: "x" } },
 			{ systemPrompt: "policy", contextMessage: { role: "user", content: [{ type: "text", text: "context" }], timestamp: 1 } },
 			undefined,
-			{ sessionId: "pi-automode:test-session", onAttempt: (attempt) => attempts.push(attempt) },
+			{
+				sessionId: "pi-automode:test-session",
+				retry: { maxAttempts: 1, baseDelayMs: 0 },
+				onAttempt: (attempt) => attempts.push(attempt),
+			},
 		);
 
 		assert.equal(decision.decision, "block");
@@ -953,11 +964,11 @@ test("classifyWithRetry fails closed when every attempt returns unparseable outp
 	assert.equal(calls.length, 2);
 });
 
-test("classifyWithRetry fails closed immediately without retrying when complete throws", async () => {
+test("classifyWithRetry fails closed immediately without retrying when complete throws a non-retryable error", async () => {
 	let calls = 0;
 	const fn = async () => {
 		calls += 1;
-		throw new Error("network down");
+		throw new Error("401 Unauthorized");
 	};
 	const decision = await classifyWithRetry(
 		fn as never,
@@ -1003,7 +1014,10 @@ test("classifyWithRetry fails closed on an empty provider error with valid allow
 		{ model: { provider: "test", id: "x" } },
 		{ systemPrompt: "s", messages: [] },
 		undefined,
-		{ onAttempt: (attempt) => attempts.push(attempt) },
+		{
+			retry: { maxAttempts: 1, baseDelayMs: 0 },
+			onAttempt: (attempt) => attempts.push(attempt),
+		},
 	);
 
 	assert.equal(decision.decision, "block");
@@ -1713,7 +1727,7 @@ test("classifyWithRetry reports each attempt's usage via onAttempt", async () =>
 test("classifyWithRetry reports a thrown attempt via onAttempt and fails closed", async () => {
 	const attempts: ClassifierIoAttempt[] = [];
 	const fn = async () => {
-		throw new Error("network down");
+		throw new Error("401 Unauthorized");
 	};
 	const decision = await classifyWithRetry(
 		fn as never,
@@ -1724,7 +1738,7 @@ test("classifyWithRetry reports a thrown attempt via onAttempt and fails closed"
 	);
 	assert.equal(decision.decision, "block");
 	assert.equal(attempts.length, 1);
-	assert.match(attempts[0]?.error ?? "", /network down/);
+	assert.match(attempts[0]?.error ?? "", /401 Unauthorized/);
 	assert.equal(attempts[0]?.response, undefined);
 });
 

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
   DEFAULT_ALLOW,
+  DEFAULT_CLASSIFIER_RETRY,
   DEFAULT_CLASSIFY_READ_ONLY_TOOLS,
   DEFAULT_ENVIRONMENT,
   DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
@@ -19,6 +20,7 @@ import { parseToolPattern } from "./permissions.ts";
 import type {
   AutoModeSettings,
   ClassifierReasoningLevel,
+  ClassifierRetryConfig,
   ConfigLoadResult,
   EffectiveConfig,
   LoadedSettingsFile,
@@ -101,6 +103,7 @@ export function validateSettingsFile(
         "enabled",
         "classifierModel",
         "classifierReasoningLevel",
+        "classifierRetry",
         "classifyReadOnlyTools",
         "fastClassifierMaxTokens",
         "maxUserTranscriptTokens",
@@ -205,6 +208,13 @@ export function validateSettingsFile(
       if (hasOwn(autoMode, "log")) {
         validateLogSetting(autoMode.log, source, diagnostics);
       }
+      if (hasOwn(autoMode, "classifierRetry")) {
+        validateClassifierRetrySetting(
+          autoMode.classifierRetry,
+          source,
+          diagnostics,
+        );
+      }
     }
   }
 
@@ -304,6 +314,58 @@ function mergeLog(
   };
 }
 
+function validRetryAttempts(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1;
+}
+
+function validRetryDelay(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function validateClassifierRetrySetting(
+  value: unknown,
+  source: string,
+  diagnostics: string[],
+): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    diagnostics.push(`${source}: autoMode.classifierRetry must be an object`);
+    return;
+  }
+  const retry = value as Record<string, unknown>;
+  for (const key of Object.keys(retry)) {
+    if (key !== "maxAttempts" && key !== "baseDelayMs") {
+      diagnostics.push(
+        `${source}: unknown autoMode.classifierRetry key ${key}`,
+      );
+    }
+  }
+  if (hasOwn(retry, "maxAttempts") && !validRetryAttempts(retry.maxAttempts)) {
+    diagnostics.push(
+      `${source}: autoMode.classifierRetry.maxAttempts must be an integer of at least 1`,
+    );
+  }
+  if (hasOwn(retry, "baseDelayMs") && !validRetryDelay(retry.baseDelayMs)) {
+    diagnostics.push(
+      `${source}: autoMode.classifierRetry.baseDelayMs must be a non-negative integer`,
+    );
+  }
+}
+
+function mergeClassifierRetry(
+  base: ClassifierRetryConfig,
+  patch: Partial<ClassifierRetryConfig> | undefined,
+): ClassifierRetryConfig {
+  if (!patch) return base;
+  return {
+    maxAttempts: validRetryAttempts(patch.maxAttempts)
+      ? patch.maxAttempts
+      : base.maxAttempts,
+    baseDelayMs: validRetryDelay(patch.baseDelayMs)
+      ? patch.baseDelayMs
+      : base.baseDelayMs,
+  };
+}
+
 const CLASSIFIER_REASONING_LEVELS = new Set<ClassifierReasoningLevel>([
   "low",
   "medium",
@@ -359,6 +421,10 @@ function applyAutoModeScalars(
       ? settings.maxToolTranscriptTokens
       : base.maxToolTranscriptTokens,
     log: mergeLog(base.log, settings.log),
+    classifierRetry: mergeClassifierRetry(
+      base.classifierRetry,
+      settings.classifierRetry,
+    ),
   };
 }
 
@@ -401,6 +467,7 @@ export function buildEffectiveConfigFromSources(
     permissionDeny: [],
     permissionAsk: [],
     log: { ...DEFAULT_LOG_CONFIG },
+    classifierRetry: { ...DEFAULT_CLASSIFIER_RETRY },
   };
 
   const globalSettings = sources.globalSettings ?? [];
