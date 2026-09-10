@@ -29,6 +29,14 @@ export type ClassifierReasoningLog =
     effectiveLevel?: undefined;
   };
 
+/** Transient-error retry policy for classifier completions. */
+export type ClassifierRetryConfig = {
+  /** Total completion attempts for transient failures (1 = no retry). */
+  maxAttempts: number;
+  /** First backoff delay in ms; doubles per additional retry. */
+  baseDelayMs: number;
+};
+
 /** Observability log configuration. Off by default. */
 export type LogConfig = {
   enabled: boolean;
@@ -46,6 +54,8 @@ export type AutoModeSettings = {
   fastClassifierMaxTokens?: number;
   /** Per-request timeout for classifier completions in milliseconds (default 20000). */
   classifierTimeoutMs?: number;
+  /** Transient-error retry policy for classifier completions (default 3 attempts, 1000 ms base delay). */
+  classifierRetry?: Partial<ClassifierRetryConfig>;
   /** When true, file tools whose resolved path is inside the working directory are allowed deterministically (no classifier), and outside-CWD file access is classified. */
   allowInsideWorkingDirectory?: boolean;
   /** Path glob patterns (file tools) that are always denied before the classifier. Supports `~` and `*` (matches any characters, including `/`). */
@@ -94,6 +104,7 @@ export type EffectiveConfig = {
   classifyReadOnlyTools: boolean;
   fastClassifierMaxTokens: number;
   classifierTimeoutMs: number;
+  classifierRetry: ClassifierRetryConfig;
   allowInsideWorkingDirectory: boolean;
   deniedPaths: string[];
   maxUserTranscriptTokens: number;
@@ -162,6 +173,8 @@ export type ClassifierIoAttempt = {
   parsed?: ClassificationDecision;
   error?: string;
   durationMs: number;
+  /** Backoff delay scheduled after this failed attempt, when a retry follows. */
+  retryDelayMs?: number;
 };
 
 /** Full classifier I/O for an action, surfaced for optional observability logging. */

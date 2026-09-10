@@ -131,14 +131,15 @@ The entry follows all related classifier-usage `message` entries. It precedes th
 | `durationMs` | total classifier time |
 | `parsed` | the final decision that was acted on (`{ decision, tier, reason }`) |
 
-Each `attempts[]` entry is `{ stage, attempt, response?, parsed?, error?, durationMs }`:
+Each `attempts[]` entry is `{ stage, attempt, response?, parsed?, error?, durationMs, retryDelayMs? }`:
 
 - `stage` — `fast` for the one-token filter or `detailed` for structured review.
 - `response` — `{ stopReason, text, model, timestamp, usage, errorMessage? }`, the raw model output and provider-reported usage for that call, including provider-reported errors and aborted requests.
 - `parsed` — the decision parsed from the response, or absent after a parse failure.
-- `error` — present after a network or authentication error. In this case, `response` is absent.
+- `error` — present after a thrown network, timeout, or authentication error. In this case, `response` is absent.
+- `retryDelayMs` — present when the attempt failed with a transient error and a backoff retry follows; the value is the scheduled wait in milliseconds. Absent on the final attempt and on deterministic failures.
 
-The array records both stages, retries, and fail-closed cases. A fast allow has one entry. A review with one successful retry has three entries.
+The array records both stages, retries, and fail-closed cases. A fast allow has one entry. A review with one successful retry has three entries. A fast allow after two transient errors has three entries, the first two with `retryDelayMs`.
 
 ## Privacy
 

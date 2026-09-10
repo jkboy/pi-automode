@@ -767,6 +767,7 @@ test("classifyInStages aborts a pending fast stage at the configured deadline", 
 		{
 			sessionId: "pi-automode:test-session",
 			timeoutMs: 10,
+			retry: { maxAttempts: 1, baseDelayMs: 0 },
 			onAttempt: (attempt) => attempts.push(attempt),
 		},
 	);
@@ -793,6 +794,7 @@ test("classifyInStages aborts a pending detailed stage at the configured deadlin
 		{
 			sessionId: "pi-automode:test-session",
 			timeoutMs: 10,
+			retry: { maxAttempts: 1, baseDelayMs: 0 },
 			onAttempt: (attempt) => attempts.push(attempt),
 		},
 	);
@@ -858,8 +860,11 @@ test("classifyWithRetry omits the timeout when not configured", async () => {
 	assert.equal(Object.hasOwn(calls[0] ?? {}, "timeoutMs"), false);
 });
 
-test("classifyInStages fails closed on malformed fast-stage output", async () => {
-	const { fn, calls } = fakeComplete([assistantWith("0 because safe")]);
+test("classifyInStages retries malformed fast-stage output once, then fails closed", async () => {
+	const { fn, calls } = fakeComplete([
+		assistantWith("0 because safe"),
+		assistantWith("0 because safe"),
+	]);
 	const decision = await classifyInStages(
 		fn,
 		{ model: { provider: "test", id: "x" } },
@@ -870,7 +875,7 @@ test("classifyInStages fails closed on malformed fast-stage output", async () =>
 
 	assert.equal(decision.decision, "block");
 	assert.match(decision.reason, /fast classifier response/i);
-	assert.equal(calls.length, 1);
+	assert.equal(calls.length, 2);
 });
 
 test("classifyInStages accepts surrounding whitespace and logs the fast-stage token verbatim", async () => {
@@ -908,10 +913,11 @@ test("classifyInStages fails closed when the fast stage throws", async () => {
 });
 
 test("classifyInStages fails closed on non-stop fast-stage allows", async () => {
+	// `length` is retried once (truncation); `error` is retried as a transient
+	// failure. Both are exercised by tests/classifier-retry.test.ts. Only the
+	// stop reasons that never retry fail closed on the first call.
 	for (const [stopReason, errorMessage] of [
-		["length", "Fast classifier response did not stop cleanly"],
 		["toolUse", "Fast classifier response did not stop cleanly"],
-		["error", "Provider failed"],
 		["aborted", "Request was aborted"],
 	] as const) {
 		const response = {
@@ -1035,7 +1041,7 @@ test("classifyWithRetry fails closed when every attempt returns unparseable outp
 	assert.equal(calls.length, 2);
 });
 
-test("classifyWithRetry fails closed immediately without retrying when complete throws", async () => {
+test("classifyWithRetry fails closed without retrying when complete throws and transient retries are disabled", async () => {
 	let calls = 0;
 	const fn = async () => {
 		calls += 1;
@@ -1046,6 +1052,7 @@ test("classifyWithRetry fails closed immediately without retrying when complete 
 		{ model: { provider: "test", id: "x" } },
 		{ systemPrompt: "s", messages: [] },
 		undefined,
+		{ retry: { maxAttempts: 1, baseDelayMs: 0 } },
 	);
 	assert.equal(decision.decision, "block");
 	assert.match(decision.reason, /Classifier failed/);
@@ -1078,20 +1085,21 @@ test("classifyWithRetry fails closed on an empty provider error with valid allow
 		...assistantWith(VALID_ALLOW, "error"),
 		errorMessage: "",
 	};
-	const { fn, calls } = fakeComplete([response, assistantWith(VALID_ALLOW)]);
+	const { fn, calls } = fakeComplete([response, response, response]);
 	const attempts: ClassifierIoAttempt[] = [];
 	const decision = await classifyWithRetry(
 		fn,
 		{ model: { provider: "test", id: "x" } },
 		{ systemPrompt: "s", messages: [] },
 		undefined,
-		{ onAttempt: (attempt) => attempts.push(attempt) },
+		{ retry: { maxAttempts: 3, baseDelayMs: 0 }, onAttempt: (attempt) => attempts.push(attempt) },
 	);
 
 	assert.equal(decision.decision, "block");
 	assert.match(decision.reason, /Classifier model returned an error response/);
-	assert.equal(calls.length, 1);
-	assert.equal(attempts[0]?.parsed, undefined);
+	// The error body is retried as transient, but its allow JSON is never parsed.
+	assert.equal(calls.length, 3);
+	assert.ok(attempts.every((attempt) => attempt.parsed === undefined));
 	assert.equal(attempts[0]?.response?.errorMessage, "");
 });
 
@@ -1155,7 +1163,7 @@ test("classifyWithRetry reports a thrown attempt via onAttempt and fails closed"
 		{ model: { provider: "test", id: "x" } },
 		{ systemPrompt: "s", messages: [] },
 		undefined,
-		{ onAttempt: (a) => attempts.push(a) },
+		{ retry: { maxAttempts: 1, baseDelayMs: 0 }, onAttempt: (a) => attempts.push(a) },
 	);
 	assert.equal(decision.decision, "block");
 	assert.equal(attempts.length, 1);

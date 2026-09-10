@@ -38,7 +38,13 @@ Higher levels can use all 512 or 1200 stage tokens before they produce visible o
 
 `classifierTimeoutMs` limits each classifier request in milliseconds. The default is 20000, and the minimum is 1000. The fast and detailed stages have separate budgets.
 
-If a request stalls or exceeds its budget, pi-automode aborts it. Then auto mode fails closed and blocks the action.
+If a request stalls or exceeds its budget, pi-automode aborts it. A timeout counts as a transient failure and follows the `classifierRetry` policy below. When no retry remains, auto mode fails closed and blocks the action.
+
+`classifierRetry` controls how pi-automode retries transient classifier failures such as network errors, timeouts, 5xx responses, and stream failures. It is an object with two integer fields. `maxAttempts` is the total number of completion attempts per stage. The default is 3, and the minimum is 1, which disables transient retries. `baseDelayMs` is the wait after the first failure in milliseconds. The default is 1000, and the minimum is 0. Each further wait doubles the previous one. With the defaults, the worst case adds about 3 seconds to a stage.
+
+Deterministic failures do not retry. These include authentication and permission errors, billing or quota exhaustion, and invalid requests. Auto mode fails closed on the first such error. Proxy gateways such as OpenRouter can report a temporary upstream rate limit with a quota-flavored code; pi-automode treats a payload that says the condition is temporary as transient and retries it. Cancelling the request also cancels a pending backoff wait, and auto mode fails closed.
+
+Malformed classifier output is retried once without a backoff wait. This covers a fast-stage response that is not `0` or `1`, a truncated response, and detailed-stage output that is not valid decision JSON. This retry budget is separate from `classifierRetry`.
 
 `allowInsideWorkingDirectory` adds a deterministic allow tier for the file tools. The default value is `false`. The file tools are `read`, `write`, `edit`, `grep`, `find`, and `ls`.
 
@@ -72,6 +78,7 @@ Example:
     "classifyReadOnlyTools": false,
     "fastClassifierMaxTokens": 512,
     "classifierTimeoutMs": 20000,
+    "classifierRetry": { "maxAttempts": 3, "baseDelayMs": 1000 },
     "allowInsideWorkingDirectory": false,
     "deniedPaths": [],
     "maxUserTranscriptTokens": 4000,

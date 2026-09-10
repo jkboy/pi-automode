@@ -64,6 +64,12 @@ export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 20_000;
 /** Largest timeout that Node can represent without reducing it to 1 ms. */
 export const MAX_CLASSIFIER_TIMEOUT_MS = 2_147_483_647;
 
+/** Default transient-error retry: 3 total attempts, 1s -> 2s backoff. */
+export const DEFAULT_CLASSIFIER_RETRY = {
+  maxAttempts: 3,
+  baseDelayMs: 1000,
+};
+
 /** Built-in trusted environment. Users extend this with `$defaults`. */
 export const DEFAULT_ENVIRONMENT = [
   "Trusted repo: the repository pi started in and its configured git remotes.",

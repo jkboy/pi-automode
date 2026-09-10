@@ -347,23 +347,25 @@ Classifier calls use `ctx.signal`, a stable classifier-specific session ID, and 
 
 `autoMode.classifierTimeoutMs` limits each fast-stage and detailed-stage request. The default is 20000 ms.
 
-If a request exceeds its budget, pi-automode aborts it and blocks the action. A stalled provider stream has the same result.
+If a request exceeds its budget, pi-automode aborts it. A stalled provider stream has the same result. The timeout is a transient failure and follows the retry policy below.
+
+`autoMode.classifierRetry` retries transient completion failures with exponential backoff. Transient failures include thrown network errors, timeouts, 5xx responses, stream failures, and provider responses with `stopReason: "error"`. Each stage has its own budget of `maxAttempts` completion attempts (default 3). The wait after the n-th failure is `baseDelayMs × 2^(n-1)` (default 1000 ms base, so 1 s then 2 s). Deterministic failures never retry: authentication and permission errors, billing or quota exhaustion, and invalid requests block on the first attempt. A quota-flavored error that says the condition is temporary (for example an OpenRouter `upstream_provider_shared_pool` rate limit) is retried. Aborting `ctx.signal` cancels a pending backoff wait and blocks the action.
 
 The fast stage requires one visible digit and uses `maxTokens: 512`. Reasoning models can use hidden tokens before they emit the digit.
 
-Extra visible content fails parsing. Detailed review uses `maxTokens: 1200`. It can retry once after malformed or truncated output.
+Extra visible content fails parsing. Detailed review uses `maxTokens: 1200`. Both stages can retry once, without a backoff wait, after malformed or truncated output. This budget is separate from the transient retry budget.
 
 ## Parsing the classifier result
 
 The fast-stage parser requires `stopReason: "stop"`. It removes surrounding whitespace and accepts only `0` or `1`.
 
-Empty responses, additional content, malformed output, and non-stop responses block immediately. Observability logs preserve the untrimmed model response.
+Empty responses, additional content, and malformed output cause one immediate retry, then block. A `stopReason: "length"` response also causes one retry; the truncated digit is never trusted. `stopReason: "error"` follows the transient retry policy. Other non-stop responses block immediately. Observability logs preserve the untrimmed model response.
 
 The detailed parser accepts only the requested JSON object from a response with `stopReason: "stop"`. It requires `decision`, `tier`, and `reason`.
 
 The parser rejects wrappers, extra fields, unknown tiers, and empty reasons. If the response shape changes, it fails closed.
 
-A response with `stopReason: "length"` can cause one retry. The truncated response cannot authorize an action. Other non-stop responses block immediately.
+A response with `stopReason: "length"` can cause one retry. The truncated response cannot authorize an action. `stopReason: "error"` follows the transient retry policy. Other non-stop responses block immediately.
 
 If detailed parsing fails after its retry, pi-automode blocks the action with this reason:
 
@@ -371,7 +373,7 @@ If detailed parsing fails after its retry, pi-automode blocks the action with th
 Classifier response was not valid decision JSON; auto mode fails closed.
 ```
 
-If the model call throws or returns an error or aborted response, pi-automode blocks the action immediately. It uses a classifier failure message.
+If the model call throws or returns an error response, pi-automode retries it under the transient retry policy and blocks the action when the budget is exhausted or the error is deterministic. An aborted response blocks immediately. Each blocked outcome uses a classifier failure message that includes the provider error.
 
 ## State, UI, and denial history
 

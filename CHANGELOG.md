@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## New features
+
+- **[Transient classifier retry](docs/configuration.md)** — new `autoMode.classifierRetry` setting (`maxAttempts`, default 3; `baseDelayMs`, default 1000). Retry network errors, timeouts, 5xx responses, stream failures, and `stopReason: "error"` responses with exponential backoff before auto mode fails closed. Authentication, billing, and invalid-request errors still fail closed on the first attempt. OpenRouter shared-pool rate limits wrapped as `insufficient_quota` are treated as transient. Each stage has its own budget, and cancelling the request cancels a pending backoff wait.
+
+## Bug fixes
+
+- **Fast-stage truncation** — Retry a fast-stage response that is not `0`/`1` or that stops with `length` once before failing closed, in line with the detailed stage. Never trust a digit from a truncated response.
+
 ## [1.16.0] - 2026-09-07
 
 ## New features

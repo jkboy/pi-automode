@@ -11,6 +11,7 @@ import { dirname, resolve } from "node:path";
 import {
   DEFAULT_ALLOW,
   DEFAULT_ALLOW_INSIDE_WORKING_DIRECTORY,
+  DEFAULT_CLASSIFIER_RETRY,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFY_READ_ONLY_TOOLS,
   DEFAULT_DENIED_PATHS,
@@ -35,6 +36,7 @@ import {
 import type {
   AutoModeSettings,
   ClassifierReasoningLevel,
+  ClassifierRetryConfig,
   ConfigLoadResult,
   EffectiveConfig,
   LoadedSettingsFile,
@@ -281,6 +283,7 @@ export function validateSettingsFile(
         "classifierModel",
         "classifierReasoningLevel",
         "classifierTimeoutMs",
+        "classifierRetry",
         "classifyReadOnlyTools",
         "fastClassifierMaxTokens",
         "allowInsideWorkingDirectory",
@@ -330,6 +333,13 @@ export function validateSettingsFile(
       ) {
         diagnostics.push(
           `${source}: autoMode.classifierTimeoutMs must be an integer from 1000 through ${MAX_CLASSIFIER_TIMEOUT_MS}`,
+        );
+      }
+      if (hasOwn(autoMode, "classifierRetry")) {
+        validateClassifierRetrySetting(
+          autoMode.classifierRetry,
+          source,
+          diagnostics,
         );
       }
       if (
@@ -521,6 +531,58 @@ function mergeLog(
   };
 }
 
+function validRetryAttempts(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1;
+}
+
+function validRetryDelay(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function validateClassifierRetrySetting(
+  value: unknown,
+  source: string,
+  diagnostics: string[],
+): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    diagnostics.push(`${source}: autoMode.classifierRetry must be an object`);
+    return;
+  }
+  const retry = value as Record<string, unknown>;
+  for (const key of Object.keys(retry)) {
+    if (key !== "maxAttempts" && key !== "baseDelayMs") {
+      diagnostics.push(
+        `${source}: unknown autoMode.classifierRetry key ${key}`,
+      );
+    }
+  }
+  if (hasOwn(retry, "maxAttempts") && !validRetryAttempts(retry.maxAttempts)) {
+    diagnostics.push(
+      `${source}: autoMode.classifierRetry.maxAttempts must be an integer of at least 1`,
+    );
+  }
+  if (hasOwn(retry, "baseDelayMs") && !validRetryDelay(retry.baseDelayMs)) {
+    diagnostics.push(
+      `${source}: autoMode.classifierRetry.baseDelayMs must be a non-negative integer`,
+    );
+  }
+}
+
+function mergeClassifierRetry(
+  base: ClassifierRetryConfig,
+  patch: Partial<ClassifierRetryConfig> | undefined,
+): ClassifierRetryConfig {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return base;
+  return {
+    maxAttempts: validRetryAttempts(patch.maxAttempts)
+      ? patch.maxAttempts
+      : base.maxAttempts,
+    baseDelayMs: validRetryDelay(patch.baseDelayMs)
+      ? patch.baseDelayMs
+      : base.baseDelayMs,
+  };
+}
+
 /**
  * Validate `deniedPaths`: an array of non-empty path patterns. Unlike the
  * `$defaults` rule lists there is no built-in default list, so `$defaults` is
@@ -627,6 +689,10 @@ function applyAutoModeScalars(
     classifierTimeoutMs: validClassifierTimeout(settings.classifierTimeoutMs)
       ? settings.classifierTimeoutMs
       : base.classifierTimeoutMs,
+    classifierRetry: mergeClassifierRetry(
+      base.classifierRetry,
+      settings.classifierRetry,
+    ),
     maxUserTranscriptTokens: validTranscriptBudget(
         settings.maxUserTranscriptTokens,
       )
@@ -675,6 +741,7 @@ export function buildEffectiveConfigFromSources(
     deniedPaths: [...DEFAULT_DENIED_PATHS],
     fastClassifierMaxTokens: DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
     classifierTimeoutMs: DEFAULT_CLASSIFIER_TIMEOUT_MS,
+    classifierRetry: { ...DEFAULT_CLASSIFIER_RETRY },
     maxUserTranscriptTokens: DEFAULT_MAX_USER_TRANSCRIPT_TOKENS,
     maxToolTranscriptTokens: DEFAULT_MAX_TOOL_TRANSCRIPT_TOKENS,
     environment: [...DEFAULT_ENVIRONMENT],
