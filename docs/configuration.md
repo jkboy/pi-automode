@@ -34,7 +34,7 @@ Set a global default classifier model in `~/.pi/agent/extensions/pi-automode/con
 
 Pi AI clamps an unsupported value to the nearest level that the selected model supports. A model without reasoning support resolves to `off`. `low` matches the reasoning effort of Codex Auto Review.
 
-Higher levels can use all 512 or 1200 stage tokens before they produce visible output. In this case, the classifier fails closed. If truncation occurs before the required `0` or `1` digit, increase `fastClassifierMaxTokens`. The default is 512, and the minimum is 16.
+Higher levels can use all 512 or 1200 stage tokens before they produce visible output. In this case, the classifier fails closed. If truncation occurs before the required `0` or `1` digit, increase `fastClassifierMaxTokens`. The default is 512, and the minimum is 16. If the detailed stage reports `Classifier response was truncated before producing valid decision JSON`, increase `detailedClassifierMaxTokens`. The default is 1200, and the minimum is 64. Reasoning models that bill hidden reasoning against the completion budget usually need several thousand tokens here.
 
 `classifierTimeoutMs` limits each classifier request in milliseconds. The default is 20000, and the minimum is 1000. The fast and detailed stages have separate budgets.
 
@@ -77,10 +77,12 @@ Example:
     "classifierReasoningLevel": "low",
     "classifyReadOnlyTools": false,
     "fastClassifierMaxTokens": 512,
+    "detailedClassifierMaxTokens": 1200,
     "classifierTimeoutMs": 20000,
     "classifierRetry": { "maxAttempts": 3, "baseDelayMs": 1000 },
     "allowInsideWorkingDirectory": false,
     "deniedPaths": [],
+    "userInputTools": [],
     "maxUserTranscriptTokens": 4000,
     "maxToolTranscriptTokens": 4000,
     "environment": [
@@ -107,6 +109,8 @@ Example:
 ```
 
 `maxUserTranscriptTokens` and `maxToolTranscriptTokens` are approximate budgets for each category. Both default to 4000 and accept integers of at least 32.
+
+`userInputTools` lists tool names whose results are the user's own answers. Some hosts register a tool that shows the user a structured question and returns the chosen option as the tool result. Without this list the classifier sees the agent's question (a tool call) but never the answer (a tool result), so an authorization the user gave through such a card does not exist for the classifier and every risky follow-up action is blocked with `no direct user authorization`. Listed tools have their non-error text results rendered as `User (answered via <tool>)` entries inside the user transcript budget; the classifier policy treats these entries as direct user instructions. The default list is empty. Entries accumulate across user-owned configuration sources; shared project `.pi/automode.json` cannot set it. Only list tools whose result is produced by the host from the user's input, never a tool whose result comes from a model, a file, or the network.
 
 Pi-automode does not support the former `maxTranscriptLines` field. Evidence selection now uses token budgets instead of line counts.
 

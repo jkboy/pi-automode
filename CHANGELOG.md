@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ## New features
 
+- **[User-input tools](docs/configuration.md)** — new `autoMode.userInputTools` list. Hosts that let the agent ask the user a structured question through a tool (the answer comes back as a tool result) can name that tool here; its non-error text results enter the classifier transcript as `User (answered via <tool>)` entries, and the classifier policy treats them as direct user instructions. Without this the classifier saw the agent's question but never the user's answer, so an authorization given through such a card was invisible and every risky follow-up action failed closed with `no direct user authorization`. Default empty; entries accumulate across user-owned config sources; shared project config cannot set it.
+- **Detailed-stage token budget** — new `autoMode.detailedClassifierMaxTokens` setting (default 1200, minimum 64). Reasoning models that spend hidden reasoning from the completion budget could truncate the detailed decision JSON at the former hard-coded 1200 and fail closed; the budget is now configurable and also feeds the action-size reserve.
 - **[Transient classifier retry](docs/configuration.md)** — new `autoMode.classifierRetry` setting (`maxAttempts`, default 3; `baseDelayMs`, default 1000). Retry network errors, timeouts, 5xx responses, stream failures, and `stopReason: "error"` responses with exponential backoff before auto mode fails closed. Authentication, billing, and invalid-request errors still fail closed on the first attempt. OpenRouter shared-pool rate limits wrapped as `insufficient_quota` are treated as transient. Each stage has its own budget, and cancelling the request cancels a pending backoff wait.
 
 ## Bug fixes

@@ -10,12 +10,20 @@ type TranscriptEntry = {
   index: number;
   order: number;
   kind: "user" | "tool";
+  /** Rendered prefix for user-kind entries; defaults to `User`. */
+  label?: string;
   text: string;
 };
 
 export type ClassifierTranscriptBudgets = {
   maxUserTokens: number;
   maxToolTokens: number;
+  /**
+   * Tool names whose results carry the user's own answers (e.g. a host
+   * "ask the user" tool). Their results join the user evidence as
+   * `User (answered via <tool>)` entries; every other tool result stays out.
+   */
+  userInputTools?: readonly string[];
 };
 
 function flattenUserContent(content: unknown): string {
@@ -86,7 +94,10 @@ function truncateToTokenCap(
   };
 }
 
-function collectTranscriptEntries(ctx: ExtensionContext): TranscriptEntry[] {
+function collectTranscriptEntries(
+  ctx: ExtensionContext,
+  userInputTools: ReadonlySet<string>,
+): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const sessionManager = ctx.sessionManager as typeof ctx.sessionManager & {
     buildContextEntries?: () => ReturnType<typeof ctx.sessionManager.getBranch>;
@@ -96,10 +107,32 @@ function collectTranscriptEntries(ctx: ExtensionContext): TranscriptEntry[] {
 
   for (const [index, entry] of contextEntries.entries()) {
     if (entry.type !== "message") continue;
-    const message = entry.message as { role?: string; content?: unknown };
+    const message = entry.message as {
+      role?: string;
+      content?: unknown;
+      toolName?: string;
+      isError?: boolean;
+    };
     if (message.role === "user") {
       const text = flattenUserContent(message.content).trim();
       if (text) entries.push({ index, order: 0, kind: "user", text });
+      continue;
+    }
+    if (message.role === "toolResult") {
+      // Only results of declared user-input tools are user evidence; an
+      // errored result (cancelled, host shutting down) is not an answer.
+      const toolName = message.toolName ?? "";
+      if (!userInputTools.has(toolName) || message.isError) continue;
+      const text = flattenUserContent(message.content).trim();
+      if (text) {
+        entries.push({
+          index,
+          order: 0,
+          kind: "user",
+          label: `User (answered via ${toolName})`,
+          text,
+        });
+      }
       continue;
     }
     if (message.role !== "assistant") continue;
@@ -132,7 +165,10 @@ function selectUserEntries(
     : maxTokens;
   const entryCap = Math.min(MAX_USER_ENTRY_TOKENS, anchorBudget);
   const rendered = users.map((entry) => {
-    const truncated = truncateToTokenCap(`User: ${entry.text}`, entryCap);
+    const truncated = truncateToTokenCap(
+      `${entry.label ?? "User"}: ${entry.text}`,
+      entryCap,
+    );
     return { ...entry, text: truncated.text, truncated: truncated.truncated };
   });
   const selectedIndices = new Set<number>();
@@ -196,12 +232,18 @@ function selectToolEntries(
   };
 }
 
-/** Build classifier evidence from user text and assistant tool-call payloads only. */
+/**
+ * Build classifier evidence from user text, assistant tool-call payloads, and
+ * the results of declared user-input tools only.
+ */
 export function buildClassifierTranscript(
   ctx: ExtensionContext,
   budgets: ClassifierTranscriptBudgets,
 ): string {
-  const entries = collectTranscriptEntries(ctx);
+  const entries = collectTranscriptEntries(
+    ctx,
+    new Set(budgets.userInputTools ?? []),
+  );
   const users = selectUserEntries(entries, budgets.maxUserTokens);
   const tools = selectToolEntries(entries, budgets.maxToolTokens);
   const selected = [...users.selected, ...tools.selected].sort(

@@ -1072,6 +1072,62 @@ test("transcript token budgets have conservative defaults and validate overrides
 	assert.equal(invalidConfig.maxToolTranscriptTokens, 4000);
 });
 
+test("detailedClassifierMaxTokens defaults to 1200, is configurable, and rejects small or non-integer values", () => {
+	assert.equal(buildEffectiveConfigFromSources({}).detailedClassifierMaxTokens, 1200);
+	const config = buildEffectiveConfigFromSources({
+		globalSettings: [{ autoMode: { detailedClassifierMaxTokens: 4096 } }],
+		projectLocalSettings: [{ autoMode: { detailedClassifierMaxTokens: 10 } as any }],
+	});
+	assert.equal(config.detailedClassifierMaxTokens, 4096);
+
+	const diagnostics = validateSettingsFile(
+		{ autoMode: { detailedClassifierMaxTokens: 1.5 } as any },
+		"inline",
+	);
+	assert.ok(
+		diagnostics.some((d) => /detailedClassifierMaxTokens must be an integer of at least 64/.test(d)),
+	);
+	assert.deepEqual(
+		validateSettingsFile({ autoMode: { detailedClassifierMaxTokens: 64 } }, "inline"),
+		[],
+	);
+});
+
+test("userInputTools defaults to empty, accumulates across user-owned scopes, and ignores shared project config", () => {
+	assert.deepEqual(buildEffectiveConfigFromSources({}).userInputTools, []);
+	const config = buildEffectiveConfigFromSources({
+		globalSettings: [{ autoMode: { userInputTools: ["ask_question"] } }],
+		projectLocalSettings: [{ autoMode: { userInputTools: ["$defaults", "ask_user"] } }],
+		projectSharedSettings: [{ autoMode: { userInputTools: ["bash"] } }],
+	});
+	assert.deepEqual(config.userInputTools, ["ask_question", "ask_user"]);
+
+	const replaced = buildEffectiveConfigFromSources({
+		globalSettings: [{ autoMode: { userInputTools: ["ask_question"] } }],
+		projectLocalSettings: [{ autoMode: { userInputTools: ["ask_user"] } }],
+	});
+	assert.deepEqual(replaced.userInputTools, ["ask_question", "ask_user"]);
+});
+
+test("userInputTools rejects malformed entries and keeps valid ones", () => {
+	const diagnostics = validateSettingsFile(
+		{ autoMode: { userInputTools: ["ask_question", "", "has space", 3] } as any },
+		"inline",
+	);
+	assert.equal(
+		diagnostics.filter((d) => /userInputTools\[\d\] must be a non-empty tool name without whitespace/.test(d)).length,
+		3,
+	);
+	assert.ok(
+		validateSettingsFile({ autoMode: { userInputTools: "ask_question" } as any }, "inline")
+			.some((d) => /userInputTools must be an array of strings/.test(d)),
+	);
+	const config = buildEffectiveConfigFromSources({
+		globalSettings: [{ autoMode: { userInputTools: ["ask_question", "", 3] } as any }],
+	});
+	assert.deepEqual(config.userInputTools, ["ask_question"]);
+});
+
 test("classifyReadOnlyTools defaults to false", () => {
 	assert.equal(buildEffectiveConfigFromSources({}).classifyReadOnlyTools, false);
 });

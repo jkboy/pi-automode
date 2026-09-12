@@ -12,6 +12,7 @@ import {
   CLASSIFIER_FAST_INSTRUCTION,
   CLASSIFIER_SYSTEM_PROMPT,
   DEFAULT_CLASSIFIER_RETRY,
+  DEFAULT_DETAILED_CLASSIFIER_MAX_TOKENS,
   DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
 } from "./constants.ts";
 import { formatModelSpec, parseModelSpec } from "./model.ts";
@@ -216,6 +217,8 @@ export type StagedClassifierOptions = {
   sessionId: string;
   /** Override the fast-stage token budget; falls back to the default (512). */
   fastClassifierMaxTokens?: number;
+  /** Override the detailed-stage token budget; falls back to the default (1200). */
+  detailedClassifierMaxTokens?: number;
   /** Per-request timeout in milliseconds; falls back to the provider default when undefined. */
   timeoutMs?: number;
   reasoningLevel?: Exclude<EffectiveClassifierReasoningLevel, "off">;
@@ -331,7 +334,6 @@ async function completeSimpleWithRegistry(
   return provider.streamSimple(model, context, options).result();
 }
 
-const DETAILED_CLASSIFIER_MAX_TOKENS = 1200;
 // Match Pi AI's context clamp safety reserve.
 const CLASSIFIER_CONTEXT_MARGIN_TOKENS = 4096;
 const CLASSIFIER_ACTION_LABEL =
@@ -368,6 +370,7 @@ export function classifierActionLimitReason(
   systemPrompt: string,
   contextText: string,
   action: string,
+  detailedClassifierMaxTokens: number = DEFAULT_DETAILED_CLASSIFIER_MAX_TOKENS,
 ): string | undefined {
   if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
     return "Classifier model has no valid context-window limit; auto mode fails closed.";
@@ -377,7 +380,7 @@ export function classifierActionLimitReason(
   }
   const baseOutputTokens = Math.max(
     fastClassifierMaxTokens,
-    DETAILED_CLASSIFIER_MAX_TOKENS,
+    detailedClassifierMaxTokens,
   );
   const reasoningBudget = reasoningLevel === undefined
     ? 0
@@ -679,7 +682,7 @@ export async function classifyWithRetry(
 ): Promise<ClassificationDecision> {
   const maxParseAttempts = options.maxAttempts ?? 2;
   const retry = options.retry ?? DEFAULT_CLASSIFIER_RETRY;
-  const maxTokens = options.maxTokens ?? DETAILED_CLASSIFIER_MAX_TOKENS;
+  const maxTokens = options.maxTokens ?? DEFAULT_DETAILED_CLASSIFIER_MAX_TOKENS;
   const temperature = options.temperature;
   const stage = options.stage ?? "detailed";
   const onAttempt = options.onAttempt;
@@ -885,6 +888,7 @@ export async function classifyInStages(
     signal,
     {
       stage: "detailed",
+      maxTokens: options.detailedClassifierMaxTokens,
       sessionId: options.sessionId,
       cacheRetention: "short",
       timeoutMs: options.timeoutMs,
@@ -924,6 +928,7 @@ export const defaultClassifyAction: ClassifyAction = async (
   const transcript = buildClassifierTranscript(ctx, {
     maxUserTokens: config.maxUserTranscriptTokens,
     maxToolTokens: config.maxToolTranscriptTokens,
+    userInputTools: config.userInputTools,
   });
   const contextText = `<loaded-project-instructions>\n${
     loadedContext || "(none)"
@@ -952,6 +957,7 @@ export const defaultClassifyAction: ClassifyAction = async (
     systemPrompt,
     contextText,
     action,
+    config.detailedClassifierMaxTokens,
   );
   if (actionLimitReason) {
     return {
@@ -977,6 +983,7 @@ export const defaultClassifyAction: ClassifyAction = async (
     {
       sessionId: classifierCacheSessionId(ctx),
       fastClassifierMaxTokens: config.fastClassifierMaxTokens,
+      detailedClassifierMaxTokens: config.detailedClassifierMaxTokens,
       timeoutMs: config.classifierTimeoutMs,
       reasoningLevel: completionPlan.reasoningLevel,
       retry: config.classifierRetry,

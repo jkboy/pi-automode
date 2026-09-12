@@ -15,6 +15,7 @@ import {
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFY_READ_ONLY_TOOLS,
   DEFAULT_DENIED_PATHS,
+  DEFAULT_DETAILED_CLASSIFIER_MAX_TOKENS,
   DEFAULT_ENVIRONMENT,
   DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
   DEFAULT_HARD_DENY,
@@ -23,6 +24,7 @@ import {
   DEFAULT_MAX_USER_TRANSCRIPT_TOKENS,
   DEFAULT_PROTECTED_PATHS,
   DEFAULT_SOFT_DENY,
+  DEFAULT_USER_INPUT_TOOLS,
   MAX_CLASSIFIER_TIMEOUT_MS,
   PI_GLOBAL_SETTINGS,
   PI_LEGACY_GLOBAL_SETTINGS,
@@ -286,8 +288,10 @@ export function validateSettingsFile(
         "classifierRetry",
         "classifyReadOnlyTools",
         "fastClassifierMaxTokens",
+        "detailedClassifierMaxTokens",
         "allowInsideWorkingDirectory",
         "deniedPaths",
+        "userInputTools",
         "maxUserTranscriptTokens",
         "maxToolTranscriptTokens",
         "environment",
@@ -360,6 +364,14 @@ export function validateSettingsFile(
         );
       }
       if (
+        hasOwn(autoMode, "detailedClassifierMaxTokens") &&
+        !validDetailedClassifierBudget(autoMode.detailedClassifierMaxTokens)
+      ) {
+        diagnostics.push(
+          `${source}: autoMode.detailedClassifierMaxTokens must be an integer of at least ${MIN_DETAILED_CLASSIFIER_MAX_TOKENS}`,
+        );
+      }
+      if (
         hasOwn(autoMode, "allowInsideWorkingDirectory") &&
         typeof autoMode.allowInsideWorkingDirectory !== "boolean"
       ) {
@@ -369,6 +381,11 @@ export function validateSettingsFile(
       }
       validateDeniedPathsSetting(
         autoMode.deniedPaths,
+        source,
+        diagnostics,
+      );
+      validateUserInputToolsSetting(
+        autoMode.userInputTools,
         source,
         diagnostics,
       );
@@ -631,6 +648,35 @@ function validateDeniedPathsSetting(
 const DENIED_PATH_PATTERN_PREFIX =
   /^(?:\/|~(?:\/|$)|\$HOME(?:\/|$)|\$\{HOME\}(?:\/|$)|\*)/;
 
+/**
+ * Validate `userInputTools`: an array of exact tool names. Like `deniedPaths`
+ * there is no built-in list, so `$defaults` is accepted as a no-op and its
+ * omission is not a diagnostic.
+ */
+function validateUserInputToolsSetting(
+  value: unknown,
+  source: string,
+  diagnostics: string[],
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    diagnostics.push(`${source}: userInputTools must be an array of strings`);
+    return;
+  }
+  for (const [index, entry] of value.entries()) {
+    if (entry === "$defaults") continue;
+    if (!validUserInputToolName(entry)) {
+      diagnostics.push(
+        `${source}: userInputTools[${index}] must be a non-empty tool name without whitespace`,
+      );
+    }
+  }
+}
+
+function validUserInputToolName(entry: unknown): entry is string {
+  return typeof entry === "string" && entry.length > 0 && !/\s/.test(entry);
+}
+
 const CLASSIFIER_REASONING_LEVELS = new Set<ClassifierReasoningLevel>([
   "low",
   "medium",
@@ -652,6 +698,14 @@ function validTranscriptBudget(value: unknown): value is number {
 
 function validFastClassifierBudget(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 16;
+}
+
+/** Floor for the detailed stage: the smallest valid decision JSON is ~40 tokens. */
+const MIN_DETAILED_CLASSIFIER_MAX_TOKENS = 64;
+
+function validDetailedClassifierBudget(value: unknown): value is number {
+  return Number.isInteger(value) &&
+    Number(value) >= MIN_DETAILED_CLASSIFIER_MAX_TOKENS;
 }
 
 function validClassifierTimeout(value: unknown): value is number {
@@ -686,6 +740,11 @@ function applyAutoModeScalars(
       )
       ? settings.fastClassifierMaxTokens
       : base.fastClassifierMaxTokens,
+    detailedClassifierMaxTokens: validDetailedClassifierBudget(
+        settings.detailedClassifierMaxTokens,
+      )
+      ? settings.detailedClassifierMaxTokens
+      : base.detailedClassifierMaxTokens,
     classifierTimeoutMs: validClassifierTimeout(settings.classifierTimeoutMs)
       ? settings.classifierTimeoutMs
       : base.classifierTimeoutMs,
@@ -739,7 +798,9 @@ export function buildEffectiveConfigFromSources(
     classifyReadOnlyTools: DEFAULT_CLASSIFY_READ_ONLY_TOOLS,
     allowInsideWorkingDirectory: DEFAULT_ALLOW_INSIDE_WORKING_DIRECTORY,
     deniedPaths: [...DEFAULT_DENIED_PATHS],
+    userInputTools: [...DEFAULT_USER_INPUT_TOOLS],
     fastClassifierMaxTokens: DEFAULT_FAST_CLASSIFIER_MAX_TOKENS,
+    detailedClassifierMaxTokens: DEFAULT_DETAILED_CLASSIFIER_MAX_TOKENS,
     classifierTimeoutMs: DEFAULT_CLASSIFIER_TIMEOUT_MS,
     classifierRetry: { ...DEFAULT_CLASSIFIER_RETRY },
     maxUserTranscriptTokens: DEFAULT_MAX_USER_TRANSCRIPT_TOKENS,
@@ -769,6 +830,7 @@ export function buildEffectiveConfigFromSources(
   const allow = createRuleAccumulator(DEFAULT_ALLOW);
   const protectedPaths = createRuleAccumulator(DEFAULT_PROTECTED_PATHS);
   const deniedPaths = createRuleAccumulator(DEFAULT_DENIED_PATHS);
+  const userInputTools = createRuleAccumulator(DEFAULT_USER_INPUT_TOOLS);
   const softDeny = createRuleAccumulator(DEFAULT_SOFT_DENY);
   const hardDeny = createRuleAccumulator(DEFAULT_HARD_DENY);
 
@@ -781,6 +843,11 @@ export function buildEffectiveConfigFromSources(
       deniedPaths,
       settings.autoMode?.deniedPaths,
       (entry) => entry.length <= MAX_WILDCARD_PATTERN_LENGTH,
+    );
+    applyRuleSetting(
+      userInputTools,
+      settings.autoMode?.userInputTools,
+      validUserInputToolName,
     );
     applyRuleSetting(
       softDeny,
@@ -798,6 +865,7 @@ export function buildEffectiveConfigFromSources(
     allow: finalizeRuleSetting(allow),
     protectedPaths: finalizeRuleSetting(protectedPaths),
     deniedPaths: finalizeRuleSetting(deniedPaths),
+    userInputTools: finalizeRuleSetting(userInputTools),
     softDeny: finalizeRuleSetting(softDeny),
     hardDeny: finalizeRuleSetting(hardDeny),
   };

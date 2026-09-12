@@ -82,6 +82,12 @@ Use this list for secrets and system paths that file tools must not send to the 
 
 Patterns support `~`, `$HOME`, and `${HOME}` expansion. The `*` wildcard matches all characters, including `/`. Pi-automode matches the typed path and its symlink-resolved form. `deniedPaths` can only restrict access.
 
+### `userInputTools`
+
+`userInputTools` is an optional list of tool names whose results are the user's own answers, such as a host tool that shows a question card and returns the selected option. The default list is empty, and it has no built-in entries. Thus, `$defaults` has no effect in this list.
+
+Text results of listed tools join the user transcript as `User (answered via <tool>)` entries. The classifier policy treats them as direct user instructions with the same weight as typed messages. Errored results and non-text results are ignored. Results of every other tool stay out of the transcript.
+
 ### `soft_deny`
 
 `$defaults` expands to soft blocks for:
@@ -121,9 +127,11 @@ Classifier evidence has separate approximate-token budgets for user messages and
 - `maxUserTranscriptTokens`: 4000
 - `maxToolTranscriptTokens`: 4000
 
+Text results of tools listed in `userInputTools` count toward the user budget as `User (answered via <tool>)` entries.
+
 The selector keeps the first and latest user messages as intent anchors. It fills the remaining space from the newest eligible entries.
 
-The selector limits individual entries. It marks omitted or truncated evidence in the classifier transcript. It excludes assistant prose and tool results.
+The selector limits individual entries. It marks omitted or truncated evidence in the classifier transcript. It excludes assistant prose and tool results other than those of `userInputTools`.
 
 These limits use approximate character counts. They do not guarantee the same result as a provider tokenizer.
 

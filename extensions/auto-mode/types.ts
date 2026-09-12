@@ -52,6 +52,8 @@ export type AutoModeSettings = {
   classifyReadOnlyTools?: boolean;
   /** Override the fast-stage completion token budget (default 512). */
   fastClassifierMaxTokens?: number;
+  /** Override the detailed-stage completion token budget (default 1200). */
+  detailedClassifierMaxTokens?: number;
   /** Per-request timeout for classifier completions in milliseconds (default 20000). */
   classifierTimeoutMs?: number;
   /** Transient-error retry policy for classifier completions (default 3 attempts, 1000 ms base delay). */
@@ -60,6 +62,8 @@ export type AutoModeSettings = {
   allowInsideWorkingDirectory?: boolean;
   /** Path glob patterns (file tools) that are always denied before the classifier. Supports `~` and `*` (matches any characters, including `/`). */
   deniedPaths?: unknown;
+  /** Tool names whose results are the user's own answers (host "ask the user" tools); those results count as user transcript evidence. */
+  userInputTools?: unknown;
   maxUserTranscriptTokens?: number;
   maxToolTranscriptTokens?: number;
   environment?: unknown;
@@ -103,10 +107,12 @@ export type EffectiveConfig = {
   classifierReasoningLevel?: ClassifierReasoningLevel;
   classifyReadOnlyTools: boolean;
   fastClassifierMaxTokens: number;
+  detailedClassifierMaxTokens: number;
   classifierTimeoutMs: number;
   classifierRetry: ClassifierRetryConfig;
   allowInsideWorkingDirectory: boolean;
   deniedPaths: string[];
+  userInputTools: string[];
   maxUserTranscriptTokens: number;
   maxToolTranscriptTokens: number;
   environment: string[];
