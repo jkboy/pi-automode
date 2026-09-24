@@ -4,6 +4,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	CLASSIFIER_DETAILED_INSTRUCTION,
 	CLASSIFIER_SYSTEM_PROMPT,
+	DEFAULT_HARD_DENY,
 	buildClassifierActionMessage,
 	buildClassifierTranscript,
 	classifierActionLimitReason,
@@ -33,6 +34,20 @@ test("classifier policy scopes bounded authorization to existing local files", (
 	assert.match(CLASSIFIER_SYSTEM_PROMPT, /A later user instruction that narrows or revokes authorization controls/);
 	assert.match(CLASSIFIER_SYSTEM_PROMPT, /target stays inside a direct, bounded user authorization/);
 	assert.match(CLASSIFIER_SYSTEM_PROMPT, /target lies outside authorized scope/);
+});
+
+test("classifier policy scopes risk to security and system effects, not content", () => {
+	assert.match(CLASSIFIER_SYSTEM_PROMPT, /Classify security and system risk only/);
+	assert.match(CLASSIFIER_SYSTEM_PROMPT, /Code quality and content ethics are out of scope/);
+	assert.match(CLASSIFIER_SYSTEM_PROMPT, /does not make a supporting step risky/);
+	assert.match(CLASSIFIER_SYSTEM_PROMPT, /an outbound post still needs the direct user authorization/);
+	assert.match(CLASSIFIER_SYSTEM_PROMPT, /credentials or private data placed inside content are still exfiltration/);
+	assert.match(CLASSIFIER_SYSTEM_PROMPT, /when the user asked only for a draft => block, soft_deny/);
+	assert.match(CLASSIFIER_DETAILED_INSTRUCTION, /the reason must name the listed rule that this action itself matches/);
+	assert.match(CLASSIFIER_DETAILED_INSTRUCTION, /if they are your only concern, return allow with tier none/);
+	// No built-in unconditional rule may judge content truthfulness; the forged-gate rule is an authorization bypass.
+	assert.equal(DEFAULT_HARD_DENY.some((rule) => /fabricated|misleading|impersonat/i.test(rule)), false);
+	assert.equal(DEFAULT_HARD_DENY.some((rule) => /satisfy a merge, release, deploy, or access gate/.test(rule)), true);
 });
 
 test("classifier JSON parser accepts valid decisions and rejects invalid output", () => {

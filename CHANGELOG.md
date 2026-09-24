@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file.
 
 ## Bug fixes
 
+- **Classifier scope: security and system risk only** — The classifier blocked read-only fetches, local draft edits, and user-authorized posts because it judged the content of an outbound campaign. It cited deception, missing disclosure, or platform rules. Core semantics rule 6 now limits risk to harm to the user's machines, data, credentials, accounts, or infrastructure, and to unauthorized or irreversible side effects. Content wording, disclosure, and commercial purpose are the user's decision. Supporting steps are judged on their own effects. Outbound posts still need direct user authorization, and secrets inside content are still exfiltration. The detailed stage must cite the matched rule before it blocks. The built-in hard-deny rule against fabricated or misleading external content is now a narrower rule against forging an approval, review, or passing CI/test result that did not happen to satisfy a merge, release, deploy, or access gate. New prompt examples contrast authorized and unauthorized posts.
 - **Fast-stage truncation** — Retry a fast-stage response that is not `0`/`1` or that stops with `length` once before failing closed, in line with the detailed stage. Never trust a digit from a truncated response.
 
 ## [1.16.0] - 2026-09-07

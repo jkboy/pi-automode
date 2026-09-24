@@ -116,9 +116,11 @@ Soft blocks can be overridden by a matching `allow` exception or direct user int
 - scanning for credentials, tokens, private keys, or secrets beyond what the task requires
 - tampering with logs, audit trails, security monitoring, permission rules, auto-mode configuration, or safety-control files
 - creating services, endpoints, workflows, or autonomous agents that execute arbitrary code without meaningful approval
-- posting or updating public/external content that is fabricated, misleading, impersonating a user, or claiming approval/action that did not happen
+- forging an approval, review, sign-off, or passing CI/test result that did not happen in order to satisfy a merge, release, deploy, or access gate
 
 Hard-deny rules cannot be overridden by `allow` or by user intent.
+
+The rules judge an action's security and system effects, not the content it carries. What content the user has the agent write, send, or post is the user's decision, including its wording, disclosure, and commercial purpose. This content does not match a rule by itself. An outbound post still falls under the `soft_deny` outbound-message rule and needs direct user authorization. A secret inside the content is still exfiltration.
 
 ### Classifier transcript budgets
 
